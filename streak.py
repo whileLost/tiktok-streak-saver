@@ -743,9 +743,20 @@ def detect_last_message_timestamp(page: Page, network_captured_timestamps: Dict[
 
     found_dts = []
 
-    # only search inside active chat container
-    chat_pane = page.locator('div[class*="ChatRoom"], div[class*="ChatContainer"], div[class*="MessageList"], main, [role="main"]')
-    target_scope = chat_pane if chat_pane.count() > 0 else page
+    # strictly target active chat container to avoid picking up sidebar preview timestamps
+    chat_pane = page.locator('div[class*="DivChatMain"], div[class*="DivChatBox"], div[class*="ChatRoom"], div[class*="ChatContainer"]')
+    if chat_pane.count() == 0:
+        try:
+            page.wait_for_selector('div[class*="DivChatMain"], div[class*="DivChatBox"]', timeout=4000)
+            chat_pane = page.locator('div[class*="DivChatMain"], div[class*="DivChatBox"]')
+        except Exception:
+            pass
+
+    if chat_pane.count() == 0:
+        logger.warning("chat pane not found, cannot detect message timestamp safely")
+        return None
+
+    target_scope = chat_pane
 
     for sel in SELECTORS["time_indicators"] + ['div:has-text(":")', 'span:has-text(":")']:
         try:
@@ -806,35 +817,37 @@ def open_chat_with_user(page: Page, target_user: str) -> bool:
         page.goto("https://www.tiktok.com/messages", wait_until="domcontentloaded", timeout=25000)
         dismiss_popups(page)
 
-        # wait up to 8s for conversations list to populate
-        chat_loc = None
-        for _ in range(8):
+        # wait up to 8s for conversation items in sidebar to render
+        try:
+            page.wait_for_selector('[data-e2e="dm-new-conversation-item"], div[class*="DivItemWrapper"]', timeout=8000)
+        except Exception:
+            pass
+
+        # check sidebar conversation items
+        matched_item = None
+        for _ in range(6):
             dismiss_popups(page)
-            for sel in [
-                f'div[class*="ConversationItem"]:has-text("{clean_target}")',
-                f'[role="listitem"]:has-text("{clean_target}")',
-                f'text="{clean_target}"',
-                f':text-matches("{clean_target}", "i")'
-            ]:
-                loc = page.locator(sel)
-                if loc.count() > 0:
-                    for i in range(loc.count()):
-                        if loc.nth(i).is_visible():
-                            chat_loc = loc.nth(i)
-                            break
-                if chat_loc:
+            items = page.locator('[data-e2e="dm-new-conversation-item"], div[class*="DivItemWrapper"]')
+            for i in range(items.count()):
+                it = items.nth(i)
+                nick_loc = it.locator('[data-e2e="dm-new-conversation-nickname"], span[class*="SpanNicknameText"]')
+                nick_text = nick_loc.first.inner_text().strip() if nick_loc.count() > 0 else ""
+                full_text = it.inner_text().strip()
+                if clean_target.lower() in nick_text.lower() or clean_target.lower() in full_text.lower():
+                    matched_item = it
                     break
-            if chat_loc:
+            if matched_item:
                 break
             page.wait_for_timeout(1000)
 
-        if chat_loc:
-            chat_loc.click(timeout=5000)
-            page.wait_for_timeout(3000)
+        if matched_item:
+            matched_item.click(timeout=5000)
+            page.wait_for_timeout(2500)
             dismiss_popups(page)
-            return True
+            if page.locator('div[class*="DivChatMain"], div[class*="DivChatBox"]').count() > 0:
+                return True
 
-        # fallback: grab display name from profile
+        # fallback: grab display name from profile if not found directly
         profile_url = f"https://www.tiktok.com/@{clean_target}"
         page.goto(profile_url, wait_until="domcontentloaded", timeout=20000)
         page.wait_for_timeout(2500)
@@ -857,20 +870,25 @@ def open_chat_with_user(page: Page, target_user: str) -> bool:
             display_name = None
 
         page.goto("https://www.tiktok.com/messages", wait_until="domcontentloaded", timeout=25000)
-        page.wait_for_timeout(3000)
         dismiss_popups(page)
 
         if display_name:
-            match_loc = page.locator(f'div[class*="ConversationItem"]:has-text("{display_name}"), [role="listitem"]:has-text("{display_name}"), text="{display_name}"')
-            if match_loc.count() == 0:
-                match_loc = page.locator(f':text-matches("{display_name}", "i")')
-
-            for i in range(match_loc.count()):
-                if match_loc.nth(i).is_visible():
-                    match_loc.nth(i).click(timeout=5000)
-                    page.wait_for_timeout(3000)
+            try:
+                page.wait_for_selector('[data-e2e="dm-new-conversation-item"], div[class*="DivItemWrapper"]', timeout=8000)
+            except Exception:
+                pass
+            items = page.locator('[data-e2e="dm-new-conversation-item"], div[class*="DivItemWrapper"]')
+            for i in range(items.count()):
+                it = items.nth(i)
+                nick_loc = it.locator('[data-e2e="dm-new-conversation-nickname"], span[class*="SpanNicknameText"]')
+                nick_text = nick_loc.first.inner_text().strip() if nick_loc.count() > 0 else ""
+                full_text = it.inner_text().strip()
+                if display_name.lower() in nick_text.lower() or display_name.lower() in full_text.lower():
+                    it.click(timeout=5000)
+                    page.wait_for_timeout(2500)
                     dismiss_popups(page)
-                    return True
+                    if page.locator('div[class*="DivChatMain"], div[class*="DivChatBox"]').count() > 0:
+                        return True
 
         logger.error("could not find conversation for '%s'", clean_target)
         return False
