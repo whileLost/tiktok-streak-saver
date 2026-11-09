@@ -804,15 +804,32 @@ def open_chat_with_user(page: Page, target_user: str) -> bool:
 
     try:
         page.goto("https://www.tiktok.com/messages", wait_until="domcontentloaded", timeout=25000)
-        page.wait_for_timeout(3500)
         dismiss_popups(page)
 
-        chat_loc = page.locator(f'text="{clean_target}"')
-        if chat_loc.count() == 0:
-            chat_loc = page.locator(f':text-matches("{clean_target}", "i")')
+        # wait up to 8s for conversations list to populate
+        chat_loc = None
+        for _ in range(8):
+            dismiss_popups(page)
+            for sel in [
+                f'div[class*="ConversationItem"]:has-text("{clean_target}")',
+                f'[role="listitem"]:has-text("{clean_target}")',
+                f'text="{clean_target}"',
+                f':text-matches("{clean_target}", "i")'
+            ]:
+                loc = page.locator(sel)
+                if loc.count() > 0:
+                    for i in range(loc.count()):
+                        if loc.nth(i).is_visible():
+                            chat_loc = loc.nth(i)
+                            break
+                if chat_loc:
+                    break
+            if chat_loc:
+                break
+            page.wait_for_timeout(1000)
 
-        if chat_loc.count() > 0:
-            chat_loc.first.click()
+        if chat_loc:
+            chat_loc.click(timeout=5000)
             page.wait_for_timeout(3000)
             dismiss_popups(page)
             return True
@@ -820,31 +837,40 @@ def open_chat_with_user(page: Page, target_user: str) -> bool:
         # fallback: grab display name from profile
         profile_url = f"https://www.tiktok.com/@{clean_target}"
         page.goto(profile_url, wait_until="domcontentloaded", timeout=20000)
-        page.wait_for_timeout(2000)
+        page.wait_for_timeout(2500)
         dismiss_popups(page)
 
         display_name = None
         try:
-            h1 = page.locator('h1[data-e2e="user-title"], h1, h2').first
+            h1 = page.locator('h1[data-e2e="user-title"], [data-e2e="user-title"]').first
             if h1.count() > 0:
                 display_name = h1.inner_text().strip()
+            if not display_name:
+                h1_gen = page.locator('h1').first
+                if h1_gen.count() > 0:
+                    display_name = h1_gen.inner_text().strip()
         except Exception:
             pass
+
+        # ignore system headers if accidentally picked
+        if display_name and display_name.lower() in ["notifications", "messages", "following", "followers", "inbox"]:
+            display_name = None
 
         page.goto("https://www.tiktok.com/messages", wait_until="domcontentloaded", timeout=25000)
         page.wait_for_timeout(3000)
         dismiss_popups(page)
 
         if display_name:
-            match_loc = page.locator(f'text="{display_name}"')
+            match_loc = page.locator(f'div[class*="ConversationItem"]:has-text("{display_name}"), [role="listitem"]:has-text("{display_name}"), text="{display_name}"')
             if match_loc.count() == 0:
                 match_loc = page.locator(f':text-matches("{display_name}", "i")')
 
-            if match_loc.count() > 0:
-                match_loc.first.click()
-                page.wait_for_timeout(3000)
-                dismiss_popups(page)
-                return True
+            for i in range(match_loc.count()):
+                if match_loc.nth(i).is_visible():
+                    match_loc.nth(i).click(timeout=5000)
+                    page.wait_for_timeout(3000)
+                    dismiss_popups(page)
+                    return True
 
         logger.error("could not find conversation for '%s'", clean_target)
         return False
