@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.env
+.venv/
+venv/
+env/
+
+# TikTok Sensitive Session & Authentication Data (NEVER COMMIT)
+browser_profile/
+tiktok_session.json
+*.session.json
+storage_state.json
+streak_history.json
+
+# Local Configuration (Contains personal usernames/webhooks)
+config.json
+
+# Security & SSH keys
+*.key
+*.pem
+*.pub
+
+# Logs & Debug Screenshots
+logs/
+*.log
+*.png
+!assets/**
+
+# OS & Editor Files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

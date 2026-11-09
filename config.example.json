@@ -1,0 +1,29 @@
+{
+  "recipients": [
+    "bestfriend_username",
+    "display name"
+  ],
+  "messages": [
+    "🔥 streak",
+    "streak 🔥",
+    "🔥"
+  ],
+  "randomize_message": true,
+  "headless": true,
+  "browser_channel": "auto",
+  "daemon_interval_minutes": 30,
+  "streak_trigger_elapsed_hours": 18.0,
+  "streak_critical_elapsed_hours": 22.0,
+  "delay_between_users_min": 4,
+  "delay_between_users_max": 8,
+  "typing_delay_ms": 50,
+  "screenshot_on_error": true,
+  "discord": {
+    "webhook_url": "",
+    "avatar_url": "https://raw.githubusercontent.com/whileLost/tiktok-streak-saver/main/assets/logo.png",
+    "notify_on_send": true,
+    "notify_on_warning": true,
+    "notify_on_error": true,
+    "notify_on_check": false
+  }
+}
