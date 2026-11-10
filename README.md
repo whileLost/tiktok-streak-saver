@@ -57,6 +57,11 @@ edit `config.json`:
   "daemon_interval_minutes": 30,
   "streak_trigger_elapsed_hours": 18.0,
   "streak_critical_elapsed_hours": 22.0,
+  "alert_recipient_expiring": false,
+  "recipient_critical_elapsed_hours": 21.0,
+  "recipient_reminder_messages": [
+    "⚠️ your streak is expiring soon! send a message to keep it alive 🔥"
+  ],
   "discord": {
     "webhook_url": "",
     "avatar_url": "https://raw.githubusercontent.com/whileLost/tiktok-streak-saver/main/assets/logo.png",

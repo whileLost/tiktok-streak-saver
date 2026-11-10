@@ -190,6 +190,12 @@ def load_config() -> dict:
         "daemon_interval_minutes": 30,
         "streak_trigger_elapsed_hours": 18.0,
         "streak_critical_elapsed_hours": 22.0,
+        "alert_recipient_expiring": False,
+        "recipient_critical_elapsed_hours": 21.0,
+        "recipient_reminder_messages": [
+            "⚠️ your streak is expiring soon! send a message to keep it alive 🔥",
+            "streak expiring soon, send a quick message! ⏰🔥"
+        ],
         "skip_if_already_sent_today": False,
         "webhook_url": ""
     }
@@ -247,6 +253,7 @@ def record_streak_sent(username: str, message: str, history: dict, config: Optio
             pass
 
     history[clean_user] = {
+        **prev_entry,
         "username": username,
         "last_date": today_str,
         "last_timestamp": now_str,
@@ -423,6 +430,35 @@ class DiscordNotifier:
                 {"name": "safe window", "value": f"`{max(0.0, 24.0 - my_elapsed_hours):.1f}h` left", "inline": True},
                 {"name": "action", "value": "`sending now`", "inline": True},
                 {"name": "urgency", "value": "🔴 critical", "inline": True}
+            ],
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "footer": {"text": "tiktok streak saver"}
+        }
+        self._post(embed)
+
+    def notify_recipient_alert(
+        self,
+        username: str,
+        message: str,
+        their_elapsed_hours: float,
+        my_elapsed_hours: Optional[float] = None
+    ) -> None:
+        if not self.notify_on_warning and not self.notify_on_send:
+            return
+        clean = username.strip().lstrip("@")
+        my_text = f"`{my_elapsed_hours:.1f}h` ago" if my_elapsed_hours is not None else "`unknown`"
+        embed = {
+            "title": f"⚠️ recipient streak expiring alert: {clean}",
+            "url": f"https://www.tiktok.com/@{clean}",
+            "color": self.COLOR_ORANGE,
+            "description": f"recipient has not sent a message in `{their_elapsed_hours:.1f}h`; sent reminder alert to preserve streak\n{self.WIDTH_SPACER}",
+            "fields": [
+                {"name": "recipient", "value": f"[{clean}](https://www.tiktok.com/@{clean})", "inline": True},
+                {"name": "their last message", "value": f"🚨 `{their_elapsed_hours:.1f}h` / 24h", "inline": True},
+                {"name": "their time left", "value": f"~`{max(0.0, 24.0 - their_elapsed_hours):.1f}h` left", "inline": True},
+                {"name": "your last message", "value": my_text, "inline": True},
+                {"name": "alert message", "value": f"`{message}`", "inline": True},
+                {"name": "status", "value": "🟠 reminder sent", "inline": True}
             ],
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "footer": {"text": "tiktok streak saver"}
@@ -743,6 +779,16 @@ def pick_message(config: dict) -> str:
     return random.choice(messages) if config.get("randomize_message", True) else messages[0]
 
 
+def pick_recipient_reminder_message(config: dict) -> str:
+    messages = config.get("recipient_reminder_messages", [
+        "⚠️ your streak is expiring soon! send a message to keep it alive 🔥",
+        "streak expiring soon, send a quick message! ⏰🔥"
+    ])
+    if not messages:
+        return "⚠️ your streak is expiring soon! send a message to keep it alive 🔥"
+    return random.choice(messages) if config.get("randomize_message", True) else messages[0]
+
+
 def find_element_from_selectors(page: Page, selectors: List[str], timeout: int = 5000):
     for sel in selectors:
         try:
@@ -1018,6 +1064,8 @@ def evaluate_and_process_user(
     clean_user = username.strip().lstrip("@")
     trigger_hours = float(config.get("streak_trigger_elapsed_hours", 18.0))
     critical_hours = float(config.get("streak_critical_elapsed_hours", 22.0))
+    alert_recipient = bool(config.get("alert_recipient_expiring", False))
+    recip_critical_hours = float(config.get("recipient_critical_elapsed_hours", 21.0))
 
     if not open_chat_with_user(page, username):
         return False, "failed to open chat"
@@ -1039,6 +1087,40 @@ def evaluate_and_process_user(
     log_my = f"{my_elapsed:.1f}h ago" if my_elapsed is not None else "never/unknown"
     log_their = f"{their_elapsed:.1f}h ago" if their_elapsed is not None else "unknown"
     logger.info("@%s: your last message was %s, their last message was %s", clean_user, log_my, log_their)
+
+    # check if recipient's timer is about to expire and optional alert feature is enabled
+    if alert_recipient and their_elapsed is not None and recip_critical_hours <= their_elapsed < 24.5:
+        last_alert_str = user_history.get("last_recipient_alert_timestamp")
+        can_alert = True
+        if last_alert_str:
+            try:
+                last_alert_dt = datetime.fromisoformat(last_alert_str)
+                hours_since_alert = (datetime.now() - last_alert_dt).total_seconds() / 3600.0
+                if hours_since_alert < 12.0:
+                    logger.info(
+                        "@%s: recipient timer expiring (%.1fh ago), but alert was already sent %.1fh ago (cooldown active)",
+                        clean_user, their_elapsed, hours_since_alert
+                    )
+                    can_alert = False
+            except Exception:
+                pass
+
+        if can_alert:
+            alert_msg = pick_recipient_reminder_message(config)
+            logger.warning(
+                "recipient streak timer expiring soon for @%s (their last: %.1fh ago), sending reminder alert: '%s'",
+                clean_user, their_elapsed, alert_msg
+            )
+            ok = type_and_send_message(page, alert_msg, config.get("typing_delay_ms", 50), dry_run)
+            if ok:
+                if not dry_run:
+                    count = record_streak_sent(username, alert_msg, history, config)
+                    history[clean_user.lower()]["last_recipient_alert_timestamp"] = datetime.now().isoformat()
+                    save_history(history)
+                    logger.info("recipient alert sent successfully, streak days: %d", count)
+                    notifier.notify_recipient_alert(username, alert_msg, their_elapsed, my_elapsed)
+                return True, "recipient alert sent"
+            return False, "failed to send recipient alert"
 
     if my_elapsed is not None:
         remaining_hours = max(0.0, 24.0 - my_elapsed)
@@ -1073,6 +1155,8 @@ def evaluate_and_process_user(
 
 def run_single_check(args: argparse.Namespace) -> None:
     config = load_config()
+    if getattr(args, "alert_recipient", None):
+        config["alert_recipient_expiring"] = True
     history = load_history()
     notifier = DiscordNotifier(config)
 
@@ -1192,6 +1276,7 @@ def main():
     parser.add_argument("--force", action="store_true", help="send message immediately ignoring timestamp")
     parser.add_argument("--dry-run", action="store_true", help="check without sending messages")
     parser.add_argument("--set-streak", type=str, help="manually set streak days for a user (e.g. --set-streak Francine:6)")
+    parser.add_argument("--alert-recipient", action="store_true", default=None, help="enable alerting recipient when their streak timer is expiring")
     parser.add_argument("--test-discord", action="store_true", help="send a test notification to configured discord webhook")
     parser.add_argument("--headful", action="store_true", default=None, help="run browser with visible ui")
 
