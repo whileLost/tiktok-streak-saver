@@ -221,7 +221,7 @@ def save_history(history: dict) -> None:
         logger.warning("failed to save history: %s", e)
 
 
-def record_streak_sent(username: str, message: str, history: dict) -> int:
+def record_streak_sent(username: str, message: str, history: dict, config: Optional[dict] = None) -> int:
     clean_user = username.strip().lstrip("@").lower()
     today_str = date.today().isoformat()
     now_str = datetime.now().isoformat()
@@ -230,7 +230,12 @@ def record_streak_sent(username: str, message: str, history: dict) -> int:
     prev_date_str = prev_entry.get("last_date")
     prev_streak = prev_entry.get("streak_days", 0)
 
-    streak_count = 1
+    # fallback to initial_streak_days in config if not tracked yet
+    if prev_streak == 0 and config:
+        init_map = config.get("initial_streak_days", {})
+        prev_streak = int(init_map.get(clean_user, init_map.get(username, 0)))
+
+    streak_count = max(prev_streak, 1)
     if prev_date_str:
         try:
             prev_date = date.fromisoformat(prev_date_str)
@@ -333,17 +338,26 @@ class DiscordNotifier:
             logger.debug("discord webhook failed: %s", e)
             return False
 
-    def notify_streak_sent(self, username: str, message: str, streak_days: int, elapsed_hours: Optional[float] = None) -> None:
+    def notify_streak_sent(
+        self,
+        username: str,
+        message: str,
+        streak_days: int,
+        my_elapsed_hours: Optional[float] = None,
+        their_elapsed_hours: Optional[float] = None
+    ) -> None:
         if not self.notify_on_send:
             return
         clean = username.strip().lstrip("@")
+        my_text = f"`{my_elapsed_hours:.1f}h` elapsed" if my_elapsed_hours is not None else "`manual`"
+        their_text = f"`{their_elapsed_hours:.1f}h` ago" if their_elapsed_hours is not None else "`unknown`"
         fields = [
             {"name": "recipient", "value": f"[{clean}](https://www.tiktok.com/@{clean})", "inline": True},
             {"name": "streak", "value": f"🔥 `{streak_days}` days", "inline": True},
             {"name": "message", "value": f"`{message}`", "inline": True},
-            {"name": "triggered after", "value": f"`{elapsed_hours:.1f}h` elapsed" if elapsed_hours is not None else "`manual`", "inline": True},
-            {"name": "status", "value": "🟢 reset to 24h", "inline": True},
-            {"name": "next window", "value": "in `18h`", "inline": True}
+            {"name": "your timer", "value": my_text, "inline": True},
+            {"name": "their last message", "value": their_text, "inline": True},
+            {"name": "status", "value": "🟢 reset to 24h", "inline": True}
         ]
 
         embed = {
@@ -357,10 +371,18 @@ class DiscordNotifier:
         }
         self._post(embed)
 
-    def notify_streak_safe(self, username: str, elapsed_hours: float, wait_hours: float, interval_mins: int = 30) -> None:
+    def notify_streak_safe(
+        self,
+        username: str,
+        my_elapsed_hours: float,
+        wait_hours: float,
+        their_elapsed_hours: Optional[float] = None,
+        interval_mins: int = 30
+    ) -> None:
         if not self.notify_on_check:
             return
         clean = username.strip().lstrip("@")
+        their_text = f"`{their_elapsed_hours:.1f}h` ago" if their_elapsed_hours is not None else "`unknown`"
         embed = {
             "title": f"⏱️ streak safe: {clean}",
             "url": f"https://www.tiktok.com/@{clean}",
@@ -368,10 +390,10 @@ class DiscordNotifier:
             "description": f"current streak window is within safe limits\n{self.WIDTH_SPACER}",
             "fields": [
                 {"name": "recipient", "value": f"[{clean}](https://www.tiktok.com/@{clean})", "inline": True},
-                {"name": "last message", "value": f"`{elapsed_hours:.1f}h` ago", "inline": True},
-                {"name": "safe window", "value": f"~`{24.0 - elapsed_hours:.1f}h` left", "inline": True},
+                {"name": "your last message", "value": f"`{my_elapsed_hours:.1f}h` ago", "inline": True},
+                {"name": "their last message", "value": their_text, "inline": True},
+                {"name": "safe window", "value": f"~`{max(0.0, 24.0 - my_elapsed_hours):.1f}h` left", "inline": True},
                 {"name": "wait time", "value": f"`{wait_hours:.1f}h` remaining", "inline": True},
-                {"name": "next check", "value": f"in `{interval_mins}m`", "inline": True},
                 {"name": "status", "value": "🟢 safe", "inline": True}
             ],
             "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -379,10 +401,16 @@ class DiscordNotifier:
         }
         self._post(embed)
 
-    def notify_expiring_warning(self, username: str, elapsed_hours: float) -> None:
+    def notify_expiring_warning(
+        self,
+        username: str,
+        my_elapsed_hours: float,
+        their_elapsed_hours: Optional[float] = None
+    ) -> None:
         if not self.notify_on_warning:
             return
         clean = username.strip().lstrip("@")
+        their_text = f"`{their_elapsed_hours:.1f}h` ago" if their_elapsed_hours is not None else "`unknown`"
         embed = {
             "title": f"⚠️ streak expiring soon: {clean}",
             "url": f"https://www.tiktok.com/@{clean}",
@@ -390,11 +418,11 @@ class DiscordNotifier:
             "description": f"streak window nearing expiration\n{self.WIDTH_SPACER}",
             "fields": [
                 {"name": "recipient", "value": f"[{clean}](https://www.tiktok.com/@{clean})", "inline": True},
-                {"name": "time elapsed", "value": f"🚨 `{elapsed_hours:.1f}h` / 24h", "inline": True},
-                {"name": "safe window", "value": f"`{max(0.0, 24.0 - elapsed_hours):.1f}h` left", "inline": True},
+                {"name": "your last message", "value": f"🚨 `{my_elapsed_hours:.1f}h` / 24h", "inline": True},
+                {"name": "their last message", "value": their_text, "inline": True},
+                {"name": "safe window", "value": f"`{max(0.0, 24.0 - my_elapsed_hours):.1f}h` left", "inline": True},
                 {"name": "action", "value": "`sending now`", "inline": True},
-                {"name": "urgency", "value": "🔴 critical", "inline": True},
-                {"name": "\u200b", "value": "\u200b", "inline": True}
+                {"name": "urgency", "value": "🔴 critical", "inline": True}
             ],
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "footer": {"text": "tiktok streak saver"}
@@ -733,17 +761,23 @@ def find_element_from_selectors(page: Page, selectors: List[str], timeout: int =
     return None
 
 
-def detect_last_message_timestamp(page: Page, network_captured_timestamps: Dict[str, datetime], username: str) -> Optional[datetime]:
+class ChatActivity:
+    def __init__(
+        self,
+        last_sent_by_me: Optional[datetime] = None,
+        last_received_from_them: Optional[datetime] = None,
+        latest_overall: Optional[datetime] = None
+    ):
+        self.last_sent_by_me = last_sent_by_me
+        self.last_received_from_them = last_received_from_them
+        self.latest_overall = latest_overall
+
+
+def detect_chat_activity(page: Page, network_captured_timestamps: Dict[str, datetime], username: str) -> ChatActivity:
     clean_user = username.strip().lstrip("@").lower()
+    activity = ChatActivity()
 
-    if clean_user in network_captured_timestamps:
-        dt = network_captured_timestamps[clean_user]
-        logger.info("found api timestamp for @%s: %s", clean_user, dt.strftime('%Y-%m-%d %H:%M:%S'))
-        return dt
-
-    found_dts = []
-
-    # strictly target active chat container to avoid picking up sidebar preview timestamps
+    # strictly target active chat container
     chat_pane = page.locator('div[class*="DivChatMain"], div[class*="DivChatBox"], div[class*="ChatRoom"], div[class*="ChatContainer"]')
     if chat_pane.count() == 0:
         try:
@@ -753,39 +787,84 @@ def detect_last_message_timestamp(page: Page, network_captured_timestamps: Dict[
             pass
 
     if chat_pane.count() == 0:
-        logger.warning("chat pane not found, cannot detect message timestamp safely")
-        return None
+        logger.warning("chat pane not found, cannot detect chat activity safely")
+        return activity
 
-    target_scope = chat_pane
+    script = """
+    () => {
+        const chatMain = document.querySelector('div[class*="DivChatMain"]');
+        if (!chatMain) return [];
+        const mainBox = chatMain.getBoundingClientRect();
+        const midX = mainBox.left + (mainBox.width * 0.45);
 
-    for sel in SELECTORS["time_indicators"] + ['div:has-text(":")', 'span:has-text(":")']:
-        try:
-            loc = target_scope.locator(sel)
-            for i in range(loc.count() - 1, -1, -1):
-                txt = loc.nth(i).inner_text().strip()
-                if len(txt) < 40 and any(c.isdigit() for c in txt):
-                    parsed = TimestampParser.parse_relative_time(txt)
-                    if parsed:
-                        found_dts.append((parsed, txt))
-        except Exception:
-            pass
+        const wrappers = Array.from(chatMain.querySelectorAll('div[class*="DivChatItemWrapper"]'));
+        return wrappers.map(w => {
+            const bubble = w.querySelector('div[data-e2e="dm-new-message-text"], div[class*="DivTextContainer"], div[class*="DivVideoContainer"]');
+            const bBox = bubble ? bubble.getBoundingClientRect() : null;
+            const isOutgoing = bBox ? (bBox.x > midX) : false;
 
-    for sel in SELECTORS["chat_messages"]:
-        try:
-            loc = target_scope.locator(sel)
-            if loc.count() > 0:
-                parsed = TimestampParser.parse_relative_time(loc.last.inner_text())
-                if parsed:
-                    found_dts.append((parsed, "last_bubble"))
-        except Exception:
-            pass
+            const tipEl = w.querySelector('p[class*="PChatTipContainer"], span[class*="SpanInfoTime"]');
+            const tipText = tipEl ? tipEl.innerText.trim() : null;
 
-    if found_dts:
-        latest_dt, source_txt = max(found_dts, key=lambda x: x[0])
-        logger.info("latest message timestamp: %s (from '%s')", latest_dt.strftime('%Y-%m-%d %H:%M:%S'), source_txt)
-        return latest_dt
+            let prev = w.previousElementSibling;
+            let headerText = null;
+            while (prev) {
+                if (!prev.className || typeof prev.className !== 'string' || !prev.className.includes('DivChatItemWrapper')) {
+                    const txt = prev.innerText ? prev.innerText.trim() : '';
+                    if (txt && txt.length < 50 && (txt.includes(':') || txt.includes('/'))) {
+                        headerText = txt;
+                        break;
+                    }
+                }
+                prev = prev.previousElementSibling;
+            }
 
-    return None
+            return {
+                isOutgoing: isOutgoing,
+                text: w.innerText ? w.innerText.trim() : '',
+                tipText: tipText,
+                headerText: headerText
+            };
+        });
+    }
+    """
+    try:
+        raw_messages = page.evaluate(script)
+    except Exception as e:
+        logger.warning("error evaluating chat bubbles: %s", e)
+        raw_messages = []
+
+    for msg in raw_messages:
+        dt = None
+        if msg.get("tipText"):
+            dt = TimestampParser.parse_relative_time(msg["tipText"])
+        if not dt and msg.get("headerText"):
+            dt = TimestampParser.parse_relative_time(msg["headerText"])
+        if not dt and msg.get("text"):
+            first_line = msg["text"].split("\n")[0].strip()
+            if len(first_line) < 40 and any(c.isdigit() for c in first_line):
+                dt = TimestampParser.parse_relative_time(first_line)
+
+        if dt:
+            if msg.get("isOutgoing"):
+                if activity.last_sent_by_me is None or dt > activity.last_sent_by_me:
+                    activity.last_sent_by_me = dt
+            else:
+                if activity.last_received_from_them is None or dt > activity.last_received_from_them:
+                    activity.last_received_from_them = dt
+
+            if activity.latest_overall is None or dt > activity.latest_overall:
+                activity.latest_overall = dt
+
+    # fallback: network captured timestamp if available
+    if clean_user in network_captured_timestamps:
+        net_dt = network_captured_timestamps[clean_user]
+        if activity.latest_overall is None or net_dt > activity.latest_overall:
+            activity.latest_overall = net_dt
+        if activity.last_received_from_them is None or net_dt > activity.last_received_from_them:
+            activity.last_received_from_them = net_dt
+
+    return activity
 
 
 def setup_network_timestamp_interception(page: Page, captured_store: Dict[str, datetime]):
@@ -943,27 +1022,39 @@ def evaluate_and_process_user(
     if not open_chat_with_user(page, username):
         return False, "failed to open chat"
 
-    last_dt = detect_last_message_timestamp(page, network_timestamps, username)
-    elapsed_hours = TimestampParser.get_elapsed_hours(last_dt)
+    activity = detect_chat_activity(page, network_timestamps, username)
 
-    if elapsed_hours is not None:
-        remaining_hours = max(0.0, 24.0 - elapsed_hours)
-        logger.info("@%s: last message was %.1fh ago (~%.1fh remaining)", clean_user, elapsed_hours, remaining_hours)
+    # determine elapsed time for your message (sent by you)
+    my_last_dt = activity.last_sent_by_me
+    user_history = history.get(clean_user.lower(), {})
+    if not my_last_dt and user_history.get("last_timestamp"):
+        try:
+            my_last_dt = datetime.fromisoformat(user_history["last_timestamp"])
+        except Exception:
+            pass
 
-        if not force and elapsed_hours < trigger_hours:
-            wait_hours = trigger_hours - elapsed_hours
-            logger.info("window not reached for @%s (needs %.1fh more, streak safe)", clean_user, wait_hours)
-            notifier.notify_streak_safe(username, elapsed_hours, wait_hours, int(config.get("daemon_interval_minutes", 30)))
+    my_elapsed = TimestampParser.get_elapsed_hours(my_last_dt)
+    their_elapsed = TimestampParser.get_elapsed_hours(activity.last_received_from_them)
+
+    log_my = f"{my_elapsed:.1f}h ago" if my_elapsed is not None else "never/unknown"
+    log_their = f"{their_elapsed:.1f}h ago" if their_elapsed is not None else "unknown"
+    logger.info("@%s: your last message was %s, their last message was %s", clean_user, log_my, log_their)
+
+    if my_elapsed is not None:
+        remaining_hours = max(0.0, 24.0 - my_elapsed)
+        if not force and my_elapsed < trigger_hours:
+            wait_hours = trigger_hours - my_elapsed
+            logger.info("window not reached for @%s (your timer needs %.1fh more, streak safe)", clean_user, wait_hours)
+            notifier.notify_streak_safe(username, my_elapsed, wait_hours, their_elapsed, int(config.get("daemon_interval_minutes", 30)))
             return True, f"window not reached (wait {wait_hours:.1f}h)"
 
-        if elapsed_hours >= critical_hours:
-            logger.warning("streak expiring soon for @%s (%.1fh elapsed)", clean_user, elapsed_hours)
-            notifier.notify_expiring_warning(username, elapsed_hours)
+        if my_elapsed >= critical_hours:
+            logger.warning("your streak timer expiring soon for @%s (%.1fh elapsed)", clean_user, my_elapsed)
+            notifier.notify_expiring_warning(username, my_elapsed, their_elapsed)
         else:
-            logger.info("triggering streak message for @%s (%.1fh elapsed)", clean_user, elapsed_hours)
+            logger.info("triggering streak message for @%s (%.1fh elapsed on your timer)", clean_user, my_elapsed)
     else:
-        logger.info("timestamp not found for @%s, checking history", clean_user)
-        user_history = history.get(clean_user.lower(), {})
+        logger.info("no prior outgoing timestamp found for @%s, checking history", clean_user)
         if not force and user_history.get("last_date") == date.today().isoformat() and config.get("skip_if_already_sent_today", True):
             return True, "already sent today"
 
@@ -973,9 +1064,9 @@ def evaluate_and_process_user(
     ok = type_and_send_message(page, msg, config.get("typing_delay_ms", 50), dry_run)
     if ok:
         if not dry_run:
-            count = record_streak_sent(username, msg, history)
+            count = record_streak_sent(username, msg, history, config)
             logger.info("sent successfully, streak days: %d", count)
-            notifier.notify_streak_sent(username, msg, count, elapsed_hours)
+            notifier.notify_streak_sent(username, msg, count, my_elapsed, their_elapsed)
         return True, "success"
     return False, "failed to send"
 
@@ -1100,13 +1191,32 @@ def main():
     parser.add_argument("--user", type=str, help="target a specific recipient")
     parser.add_argument("--force", action="store_true", help="send message immediately ignoring timestamp")
     parser.add_argument("--dry-run", action="store_true", help="check without sending messages")
+    parser.add_argument("--set-streak", type=str, help="manually set streak days for a user (e.g. --set-streak Francine:6)")
     parser.add_argument("--test-discord", action="store_true", help="send a test notification to configured discord webhook")
     parser.add_argument("--headful", action="store_true", default=None, help="run browser with visible ui")
 
     args = parser.parse_args()
     config = load_config()
 
-    if args.test_discord:
+    if args.set_streak:
+        if ":" not in args.set_streak:
+            print("[error] format must be username:days, e.g. --set-streak Francine:6")
+            sys.exit(1)
+        u_target, days_str = args.set_streak.split(":", 1)
+        clean_u = u_target.strip().lstrip("@").lower()
+        try:
+            days_val = int(days_str.strip())
+        except ValueError:
+            print("[error] streak days must be an integer")
+            sys.exit(1)
+        h = load_history()
+        entry = h.get(clean_u, {"username": u_target.strip().lstrip("@")})
+        entry["streak_days"] = days_val
+        h[clean_u] = entry
+        save_history(h)
+        print(f"[ok] streak days for @{u_target.strip().lstrip('@')} set to {days_val}")
+        sys.exit(0)
+    elif args.test_discord:
         notifier = DiscordNotifier(config)
         ok = notifier.send_test()
         print("\n[ok] test discord notification sent!" if ok else "\n[error] failed to send discord webhook, check webhook_url")
