@@ -843,35 +843,49 @@ def detect_chat_activity(page: Page, network_captured_timestamps: Dict[str, date
         const mainBox = chatMain.getBoundingClientRect();
         const midX = mainBox.left + (mainBox.width * 0.45);
 
-        const wrappers = Array.from(chatMain.querySelectorAll('div[class*="DivChatItemWrapper"]'));
-        return wrappers.map(w => {
-            const bubble = w.querySelector('div[data-e2e="dm-new-message-text"], div[class*="DivTextContainer"], div[class*="DivVideoContainer"]');
-            const bBox = bubble ? bubble.getBoundingClientRect() : null;
-            const isOutgoing = bBox ? (bBox.x > midX) : false;
+        const allNodes = Array.from(chatMain.querySelectorAll('div[class*="DivTimeContainer"], div[class*="DivChatItemWrapper"]'));
+        let currentTimeStr = null;
+        const messages = [];
 
-            const tipEl = w.querySelector('p[class*="PChatTipContainer"], span[class*="SpanInfoTime"]');
-            const tipText = tipEl ? tipEl.innerText.trim() : null;
-
-            let prev = w.previousElementSibling;
-            let headerText = null;
-            while (prev) {
-                if (!prev.className || typeof prev.className !== 'string' || !prev.className.includes('DivChatItemWrapper')) {
-                    const txt = prev.innerText ? prev.innerText.trim() : '';
-                    if (txt && txt.length < 50 && (txt.includes(':') || txt.includes('/'))) {
-                        headerText = txt;
-                        break;
-                    }
+        allNodes.forEach((node, idx) => {
+            const cName = String(node.className || '');
+            if (cName.includes('DivTimeContainer')) {
+                const txt = node.innerText ? node.innerText.trim() : '';
+                if (txt) {
+                    currentTimeStr = txt;
                 }
-                prev = prev.previousElementSibling;
+                return;
             }
 
-            return {
-                isOutgoing: isOutgoing,
-                text: w.innerText ? w.innerText.trim() : '',
-                tipText: tipText,
-                headerText: headerText
-            };
+            if (cName.includes('DivChatItemWrapper')) {
+                // ignore pure system tips (e.g. "you deleted a message", streak pet changes)
+                const isOnlyTip = !node.querySelector('div[data-e2e="dm-new-message-text"], div[class*="DivTextContainer"], div[class*="DivVideoContainer"], img[class*="Sticker"], div[class*="Sticker"], div[class*="DivMessageHoverContainer"]') && node.querySelector('p[class*="PChatTipContainer"]');
+                if (isOnlyTip) {
+                    return;
+                }
+
+                const bubble = node.querySelector('div[data-e2e="dm-new-message-text"], div[class*="DivTextContainer"], div[class*="DivVideoContainer"], img[class*="Sticker"], div[class*="Sticker"], div[class*="DivMessageHoverContainer"]');
+                const bBox = bubble ? bubble.getBoundingClientRect() : node.getBoundingClientRect();
+                const isOutgoing = (bBox.left > midX);
+
+                const hasSticker = !!node.querySelector('img[class*="Sticker"], div[class*="Sticker"]');
+                const text = node.innerText ? node.innerText.trim() : '';
+
+                const tipEl = node.querySelector('span[class*="SpanInfoTime"]');
+                const tipText = tipEl ? tipEl.innerText.trim() : null;
+
+                messages.push({
+                    idx,
+                    isOutgoing,
+                    hasSticker,
+                    text,
+                    tipText,
+                    headerText: currentTimeStr
+                });
+            }
         });
+
+        return messages;
     }
     """
     try:
